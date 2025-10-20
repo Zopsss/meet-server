@@ -18,7 +18,7 @@ const ageUtil = require('../helper/age');
 require('dotenv').config()
 const RegisteredParticipant = mongoose.model("RegisteredParticipant");
 const Waitlist = mongoose.model("Waitlist");
-const CHECK_FOR_THRESHOLD_START = process.env.CHECK_FOR_THRESHOLD_START
+const CHECK_FOR_THRESHOLD_START = process.env.CHECK_FOR_THRESHOLD_START || 11;
 const checkEventFull = async (eventId) => {
   const eventData = await event.getById({ id: eventId });
   const registeredCount = await RegisteredParticipant.countDocuments({
@@ -1252,7 +1252,7 @@ exports.cancel = async function (req, res) {
           amount_off: amountOffCents,
           currency: 'eur',
           redeem_by: redeemBy,
-          name: `Voucher - ${eventData.tagline}`,
+          name: `Voucher - ${eventData.tagline}`.substring(0, 40),
           metadata: { user_id: String(userData._id), event_id: String(eventId), reason: 'timely_cancellation' }
         });
 

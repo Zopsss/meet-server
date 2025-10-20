@@ -36,7 +36,8 @@ exports.get = async function ({ search = '', city = '', user_id = null }) {
     $and: [
       { date: { $gte: today } }, // ✅ Filter for upcoming/today's events only
       { $or: [{ is_draft: false }, { is_draft: { $exists: false } }] },
-      { $or: [{ is_canceled: false }, { is_canceled: { $exists: false } }] }
+      { $or: [{ is_canceled: false }, { is_canceled: { $exists: false } }] },
+      { has_grouped_by_ai: false }
     ]
   };
 
