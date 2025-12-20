@@ -208,7 +208,28 @@ const sendEventAvailabilityMailToWaitlist = async (registration, res) => {
     console.log(waitlistedParticipants, 'waitlistedParticipants');
 
     const Transaction = mongoose.model('Transaction');
-    waitlistedParticipants.forEach(async (participant) => {
+    for (const participant of waitlistedParticipants) {
+      const registeredPart = await RegisteredParticipant.findById(participant.participant_id);
+      if (!registeredPart) continue;
+
+      const mainUserObj = {
+        gender: registeredPart.gender,
+        _id: participant.user_id._id,
+        email: participant.user_id.email
+      };
+
+      const isAllowed = await checkGenderRatio(mainUserObj, null, participant.event_id, participant.age_group, null);
+
+      if (!isAllowed) {
+        console.log(`Skipping waitlist email for ${participant.user_id.email} due to gender balance.`);
+        continue;
+      }
+
+      // Update timestamp BEFORE sending email (or parallel)
+      await Waitlist.findByIdAndUpdate(participant._id, {
+        waitlist_email_sent_at: new Date()
+      });
+
       let payment;
       const existingPayment = await Transaction.findOne({
         user_id: participant.user_id._id,
@@ -227,7 +248,7 @@ const sendEventAvailabilityMailToWaitlist = async (registration, res) => {
           user_id: participant.user_id._id,
           participant_id: participant.participant_id,
           ...participant.sub_participant_id && { sub_participant_id: [participant.sub_participant_id] },
-          ...participant.invited_user_id && { invited_user_id: registerFriend.invited_user_id },
+          ...participant.invited_user_id && { invited_user_id: participant.invited_user_id },
           type: 'Register Event',
           amount: participant.sub_participant_id ? 40 : 20,
           event_id: participant.event_id,
@@ -250,11 +271,41 @@ const sendEventAvailabilityMailToWaitlist = async (registration, res) => {
         }
       })
       console.log('Mail for link', `${process.env.CLIENT_URL}/event/${payment._id}`, 'sent');
-
-    })
+    }
   } catch (error) {
     console.log('error', error);
   }
+}
+
+const checkPriorityWindow = async (eventId, age_group, userEmail, gender, res) => {
+  console.log("check priority window called.")
+  const activeWaitlistEntries = await Waitlist.find({
+    event_id: eventId,
+    age_group: age_group,
+    waitlist_email_sent_at: { $gt: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+  }).populate('participant_id');
+
+  if (activeWaitlistEntries.length === 0) {
+    return true;
+  }
+
+  const entriesForThisGender = activeWaitlistEntries.filter(e => e.participant_id && e.participant_id.gender === gender);
+
+  if (entriesForThisGender.length === 0) {
+    // If there is an active window for the other gender, we don't block this gender.
+    return true; 
+  }
+
+  if (!userEmail) return false; 
+
+  const userObj = await user.get({ email: userEmail });
+  if (!userObj) return false;
+
+  const isUserNotified = entriesForThisGender.some(e => e.user_id.toString() === userObj._id.toString());
+
+  if (isUserNotified) return true; // user is in waiting list.
+  
+  throw { message: "Priority registration window active. Only waitlisted participants can register." };
 }
 
 /*
@@ -269,6 +320,7 @@ exports.create = async function (req, res) {
     const { mainUser, friend, id, age_group } = req.body
 
     await checkEventFull(id);
+    await checkPriorityWindow(id, age_group, mainUser.email, mainUser.gender, res);
     const ageGroupCheck = verifyAgeGroup(mainUser, friend, age_group);
     if (!ageGroupCheck) {
       throw ({ message: res.__('register_participant.age_group.invalid') })
@@ -373,6 +425,7 @@ exports.create = async function (req, res) {
         }
       })
     }
+    void sendEventAvailabilityMailToWaitlist(registerMainUser, res).catch(console.error)
     const payment = await transaction.create({
       user_id: userData._id,
       participant_id: registerMainUser._id,
@@ -646,6 +699,7 @@ exports.checkForSlotAvailability = async function (req, res) {
     if (!mainUser) {
       utility.assert(mainUser, res.__('user.invalid'));
     }
+
     let friend = null
     if (transactionUser.invited_user_id) {
       friend = await User.findById(transactionUser.invited_user_id)
